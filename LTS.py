@@ -86,55 +86,57 @@ class LTS:
         ps = self.sample_probability(p)
 
         max_inliers = 0
-        max_H = None
-        max_is_corrected = None
+        extracted_inliers = None
+        best_H = None
 
         # Probability guided sampling
         for _ in range(max_iteration):
-            is_corrected = np.zeros(self.number_of_points)
             sample = np.random.choice(self.number_of_points, 4, replace=False, p=ps)
             curr_H = cv.findHomography(self.source_points[sample], self.target_points[sample])[0]
 
-            inliers = 0
+            # 儲存當前的 inliers
+            inliers = []
             for i in range(self.number_of_points):
-                check = is_point_satisfying_homography(
+                is_inlier = is_point_satisfying_homography(
                     curr_H,
                     self.source_points[i][0],
                     self.source_points[i][1],
                     self.target_points[i][0],
                     self.target_points[i][1],
                 )
-                if check:
-                    is_corrected[i] = 1
-                    inliers += 1
-                    
-            # 若 inliers 數量超過目前最大值，則更新 H
-            if inliers > max_inliers:
-                max_inliers = inliers
-                max_H = curr_H
-                max_is_corrected = is_corrected
-                
-        for i in range(len(max_is_corrected)):
-            if (max_is_corrected[i] == 1):
-                true_positive = is_point_satisfying_homography(
-                    self.H,
-                    self.source_points[i][0],
-                    self.source_points[i][1],
-                    self.target_points[i][0],
-                    self.target_points[i][1],
-                )
-                if true_positive:
-                    self.correct_matches += 1
+                if is_inlier:
+                    inliers.append([self.source_points[i], self.target_points[i]])
+                                        
+            # 若 inliers 數量超過目前最大值，則更新 max_inliers, extracted_inliers, best_H
+            if len(inliers) > max_inliers:
+                max_inliers = len(inliers)
+                extracted_inliers = inliers
+                best_H = curr_H
+        
+        # 計算正確的 match 數量
+        for p1, p2 in extracted_inliers:
+            true_positive = is_point_satisfying_homography(
+                self.H,
+                p1[0],
+                p1[1],
+                p2[0],
+                p2[1],
+            )
+            if true_positive:
+                self.correct_matches += 1
 
-        error = self.calculate_reprojection_error(self.source_points, self.H, max_H)
+        error = self.calculate_reprojection_error(self.source_points, self.H, best_H)
         
         self.max_inliers = max_inliers
-        self.max_H = max_H
-        self.max_is_corrected = max_is_corrected
+        self.best_H = best_H
         print(f"Extracted matches: {max_inliers}")
         print(f"Removed matches {self.number_of_points - max_inliers}")
         print(f"Correct matches in the extracted matches: {self.correct_matches}")
         print(f"Reprojection error: {error}")
+        print("Ground truth H:")
+        print(self.H)
+        print("Estimated H:")
+        print(best_H)
 
     def plot_results(self):
         """Plot the results of matching points."""
