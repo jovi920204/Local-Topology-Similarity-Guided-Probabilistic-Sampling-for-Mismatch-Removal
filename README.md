@@ -1,5 +1,6 @@
 # Local Topology Similarity Guided Probabilistic Sampling for Mismatch Removal
-This repo is not an offical code
+## Warning
+This repository is **not an official implementation of the paper**. The implementation may contain differences or simplifications compared to the original work. For detailed information, please refer to the [paper link](https://www.sciencedirect.com/science/article/abs/pii/S003132032400044X).
 
 ## Dataset
 [Mikolajczyk Dataset](https://www.robots.ox.ac.uk/~vgg/research/affine/)
