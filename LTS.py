@@ -13,11 +13,11 @@ class LTS:
         self.ground_truth_path = ground_truth_path
         self.source_points = None
         self.target_points = None
-        self.true_inlier = None
-        self.true_outlier = None
-        self.number_of_points = None # total number of matching points
-        self.total_extracted_matches = 0
-        self.extracted_correct_matches = 0
+        self.total_correct_matches = None # 在 ground truth 中的 correct match 數量
+        self.total_mismatches = None # 在 ground truth 中的 mismatch 數量
+        self.number_of_points = None # 總共的 feature points 數量
+        self.extracted_matches = 0 # 經過 RANSAC 後的 match 數量, 不論正確與否
+        self.correct_matches = 0 # 經過 RANSAC 後的 correct match 數量
         self.H = None
         self._load_ground_truth()
 
@@ -49,21 +49,24 @@ class LTS:
         total_probability = np.sum(1 - p)
         return (1 - p) / total_probability
 
-    def extract_features(self, method="SIFT", threshold=0.2834):
-        """Extract features using SIFT or ORB."""
+    def extract_features(self, method="SIFT", threshold=1):
+        """Extract features using SIFT or ORB.
+        params:
+            threshold: the threshold for matching points.
+        """
         if method == "SIFT":
-            self.source_points, self.target_points, self.true_inlier, self.true_outlier = SIFT(
+            self.source_points, self.target_points, self.total_correct_matches, self.total_mismatches = SIFT(
                 self.img1_path, self.img2_path, self.H, threshold
             )
         elif method == "ORB":
-            self.source_points, self.target_points = ORB(
+            self.source_points, self.target_points, self.total_correct_matches, self.total_mismatches = ORB(
                 self.img1_path, self.img2_path, self.H, threshold
             )
         else:
             raise ValueError("Unsupported feature extraction method.")
         self.number_of_points = self.source_points.shape[0]
 
-    def run_ransac(self, threshold=0.16, max_iteration=100):
+    def run_ransac(self, max_iteration=100):
         """Run RANSAC to find the best homography matrix."""
         
         # Construct the adjacency matrix
@@ -86,6 +89,7 @@ class LTS:
         max_H = None
         max_is_corrected = None
 
+        # Probability guided sampling
         for _ in range(max_iteration):
             is_corrected = np.zeros(self.number_of_points)
             sample = np.random.choice(self.number_of_points, 4, replace=False, p=ps)
@@ -99,16 +103,17 @@ class LTS:
                     self.source_points[i][1],
                     self.target_points[i][0],
                     self.target_points[i][1],
-                    tolerance=threshold,
                 )
                 if check:
                     is_corrected[i] = 1
                     inliers += 1
                     
+            # 若 inliers 數量超過目前最大值，則更新 H
             if inliers > max_inliers:
                 max_inliers = inliers
                 max_H = curr_H
                 max_is_corrected = is_corrected
+                
         for i in range(len(max_is_corrected)):
             if (max_is_corrected[i] == 1):
                 true_positive = is_point_satisfying_homography(
@@ -117,16 +122,19 @@ class LTS:
                     self.source_points[i][1],
                     self.target_points[i][0],
                     self.target_points[i][1],
-                    tolerance=threshold,
                 )
                 if true_positive:
-                    self.extracted_correct_matches += 1
+                    self.correct_matches += 1
 
+        error = self.calculate_reprojection_error(self.source_points, self.H, max_H)
+        
         self.max_inliers = max_inliers
         self.max_H = max_H
         self.max_is_corrected = max_is_corrected
-        print(f"LTS Number of max inliers: {max_inliers}")
-        print(f"LTS Number of outliers: {self.number_of_points - max_inliers}")
+        print(f"Extracted matches: {max_inliers}")
+        print(f"Removed matches {self.number_of_points - max_inliers}")
+        print(f"Correct matches in the extracted matches: {self.correct_matches}")
+        print(f"Reprojection error: {error}")
 
     def plot_results(self):
         """Plot the results of matching points."""
@@ -134,16 +142,44 @@ class LTS:
             self.img1_path, self.img2_path, self.source_points, self.target_points, self.max_is_corrected, self.H
         )
         
+    def calculate_reprojection_error(self, points, H_gt, H_est):
+        """
+        計算重投影誤差 (Reprojection Error)
+
+        Args:
+            points (numpy.ndarray): 原始點集，形狀為 (N, 2)，每行為 [x, y]
+            H_gt (numpy.ndarray): 真實的 Homography 矩陣，形狀為 (3, 3)
+            H_est (numpy.ndarray): 估計的 Homography 矩陣，形狀為 (3, 3)
+
+        Returns:
+            float: 平均重投影誤差
+        """
+        # 將點擴展為齊次座標 (N, 2) -> (N, 3)
+        points_homogeneous = np.hstack((points, np.ones((points.shape[0], 1))))
+        
+        # 用 H_gt 和 H_est 映射點集
+        projected_gt = H_gt @ points_homogeneous.T  # 形狀為 (3, N)
+        projected_est = H_est @ points_homogeneous.T  # 形狀為 (3, N)
+        
+        # 正規化齊次座標 (x, y, w) -> (x/w, y/w)
+        projected_gt = projected_gt[:2, :] / projected_gt[2, :]
+        projected_est = projected_est[:2, :] / projected_est[2, :]
+        
+        # 計算歐幾里得距離的平方
+        squared_errors = np.sum((projected_gt - projected_est)**2, axis=0)
+        
+        # 平均誤差
+        mean_error = np.sqrt(np.mean(squared_errors))
+        return mean_error
     def evaluate(self):
         """Evaluate the results."""
         
-        precision = self.extracted_correct_matches / self.max_inliers
-        recall = self.extracted_correct_matches / self.number_of_points
+        precision = self.correct_matches / self.max_inliers
+        recall = self.correct_matches / self.total_correct_matches
         f1 = 2 * precision * recall / (precision + recall)
-        print(f"Precision: {precision} = {self.extracted_correct_matches} / {self.max_inliers}")
-        print(f"Recall: {recall} = {self.extracted_correct_matches} / {self.number_of_points}")
+        print(f"Precision: {precision} = {self.correct_matches} / {self.max_inliers}")
+        print(f"Recall: {recall} = {self.correct_matches} / {self.total_correct_matches}")
         print(f"F1 Score: {f1}")
-        
 
 if __name__ == "__main__":
     root = os.path.dirname(os.path.abspath(__file__))
@@ -152,7 +188,7 @@ if __name__ == "__main__":
     ground_truth_path = os.path.join(root, "dataset/boat/H1to3p")
 
     lts = LTS(img1_path, img2_path, ground_truth_path)
-    lts.extract_features(method="SIFT", threshold=0.8)
+    lts.extract_features(method="SIFT", threshold=0.8, isShow=True)
     print("-------------------")
     print("Run RANSAC")
     lts.run_ransac(threshold=3.5, max_iteration=100)
