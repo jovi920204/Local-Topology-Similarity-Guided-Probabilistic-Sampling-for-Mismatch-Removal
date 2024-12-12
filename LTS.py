@@ -41,7 +41,8 @@ class LTS:
     @staticmethod
     def calculate_probability(SUM, average, sigma):
         """Calculate the probability of the SUM."""
-        return 1 - 1 / (1 + np.exp((-SUM - average) / sigma))
+        print(-(SUM - average) / sigma)
+        return 1 - 1 / (1 + np.exp(-(SUM - average) / sigma))
 
     @staticmethod
     def sample_probability(p):
